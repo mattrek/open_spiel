@@ -172,9 +172,10 @@ void TicTacToeState::ObservationTensor(Player player,
   SPIEL_CHECK_LT(player, num_players_);
 
   // Treat `values` as a 2-d tensor.
-  TensorView<2> view(values, {kCellStates, kNumCells}, true);
+  TensorView<2> view(values, {kCellStates + 1, kNumCells}, true);
   for (int cell = 0; cell < kNumCells; ++cell) {
     view[{static_cast<int>(board_[cell]), cell}] = 1.0;
+    view[{kCellStates, cell}] = current_player_;
   }
 }
 

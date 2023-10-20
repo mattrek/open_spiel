@@ -106,7 +106,11 @@ void HistoryNode::AddChild(
   if (child.second == nullptr) {
     SpielFatalError("Error inserting child; child is null.");
   }
-  SPIEL_CHECK_PROB_TOLERANCE(child.first, ProbabilityDefaultTolerance());
+  if (child.first < 0. || child.first > 1.) {
+    SpielFatalError(absl::StrCat(
+        "AddChild error: Probability for child must be in [0, 1], not: ",
+        child.first));
+  }
   child_info_[outcome] = std::move(child);
   if (child_info_.size() > legal_actions_.size()) {
     SpielFatalError("More children than legal actions.");
@@ -120,7 +124,8 @@ std::pair<double, HistoryNode*> HistoryNode::GetChild(Action outcome) {
   }
   // it->second.first is the probability associated with outcome, so as it is a
   // probability, it must be in [0, 1].
-  SPIEL_CHECK_PROB_TOLERANCE(it->second.first, ProbabilityDefaultTolerance());
+  SPIEL_CHECK_GE(it->second.first, 0.);
+  SPIEL_CHECK_LE(it->second.first, 1.);
   std::pair<double, HistoryNode*> child =
       std::make_pair(it->second.first, it->second.second.get());
   if (child.second == nullptr) {
@@ -207,7 +212,7 @@ std::vector<std::pair<std::unique_ptr<State>, double>> DecisionNodes(
     std::vector<std::pair<std::unique_ptr<State>, double>> children =
         DecisionNodes(*child, best_responder, policy);
     const double policy_prob = GetProb(actions_and_probs, action);
-    SPIEL_CHECK_PROB_TOLERANCE(policy_prob, ProbabilityDefaultTolerance());
+    SPIEL_CHECK_GE(policy_prob, 0);
     for (auto& [state, prob] : children) {
       states_and_probs.push_back(
           {std::move(state),

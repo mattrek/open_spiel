@@ -31,8 +31,9 @@ uint_fast32_t Seed() { return absl::ToUnixMicros(absl::Now()); }
 
 void MakeAllRoshamboBots() {
   std::vector<std::unique_ptr<Bot>> bots;
-  for (const auto& [name, factory] : ::roshambo_tournament::bot_map) {
-    bots.push_back(roshambo::MakeRoshamboBot(0, name));
+  for (std::pair<std::string, std::function<int()>> bot_pair :
+       ::roshambo_tournament::bot_map) {
+    bots.push_back(roshambo::MakeRoshamboBot(0, bot_pair.first));
   }
   SPIEL_CHECK_EQ(bots.size(), roshambo::kNumBots);
 }

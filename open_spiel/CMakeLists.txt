@@ -223,7 +223,6 @@ set (OPEN_SPIEL_OBJECTS
   $<TARGET_OBJECTS:bots>
   $<TARGET_OBJECTS:games>
   $<TARGET_OBJECTS:game_transforms>
-  $<TARGET_OBJECTS:bridge_double_dummy_solver>
   $<TARGET_OBJECTS:algorithms>
   $<TARGET_OBJECTS:utils>
   $<TARGET_OBJECTS:tests>
@@ -364,4 +363,4 @@ if (BUILD_SHARED_LIB)
   )
 endif()
 
-add_subdirectory (tests)
+add_subdirectory(tests)

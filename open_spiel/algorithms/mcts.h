@@ -55,8 +55,7 @@
 // player greedily chooses their maximum among proven children values, or there
 // exists one child whose proven value is Game::MaxUtility()), so it will work
 // for multiplayer, general-sum, and arbitrary payoff games (not just win/loss/
-// draw games). Also chance nodes are considered proven only if all children
-// have the same value.
+// draw games).
 //
 // Some references:
 // - Sturtevant, An Analysis of UCT in Multi-Player Games,  2008,
@@ -117,6 +116,7 @@ struct SearchNode {
   Player player = 0;            // Which player gets to make this action.
   int explore_count = 0;        // Number of times this node was explored.
   double total_reward = 0;      // Total reward passing through this node.
+  double eval = 0;              // The initial evaluation (for PUCT search)
   std::vector<double> outcome;  // The reward if each players plays perfectly.
   std::vector<SearchNode> children;  // The successors to this state.
 
@@ -160,6 +160,7 @@ class MCTSBot : public Bot {
   // failing. We don't know why right now, but intend to fix this.
   MCTSBot(
       const Game& game, std::shared_ptr<Evaluator> evaluator, double uct_c,
+      int min_simulations,
       int max_simulations,
       int64_t max_memory_mb,  // Max memory use in megabytes.
       bool solve,             // Whether to back up solved states.
@@ -203,6 +204,7 @@ class MCTSBot : public Bot {
   void GarbageCollect(SearchNode* node);
 
   double uct_c_;
+  int min_simulations_;
   int max_simulations_;
   int max_nodes_;  // Max nodes allowed in the tree
   int nodes_;  // Nodes used in the tree.

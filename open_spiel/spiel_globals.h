@@ -19,6 +19,8 @@
 
 namespace open_spiel {
 
+constexpr bool kPlayerCentricObs = true;
+
 // Player ids are 0, 1, 2, ...
 // Negative numbers are used for various special values.
 enum PlayerId {

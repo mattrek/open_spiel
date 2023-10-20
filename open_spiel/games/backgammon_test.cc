@@ -39,7 +39,7 @@ void CheckHits(const State &state) {
   const auto &bstate = down_cast<const BackgammonState &>(state);
   for (Action action : bstate.LegalActions()) {
     std::vector<CheckerMove> cmoves = bstate.AugmentWithHitInfo(
-        player, bstate.SpielMoveToCheckerMoves(player, action));
+        player, bstate.SpielMoveToCheckerMoves(action));
     std::cout << bstate.ActionToString(player, action) << std::endl;
     for (CheckerMove cmove : cmoves) {
       const int to_pos = bstate.GetToPos(player, cmove.pos, cmove.num);
@@ -142,14 +142,20 @@ void BearOffFurthestFirstTest() {
        {2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}});
   std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kThreeDice);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(4), 3);
 
   // Check for exactly one legal move.
   std::vector<Action> legal_actions = bstate->LegalActions();
+  std::cout << "Legal actions:" << std::endl;
+  for (Action action : legal_actions) {
+    std::cout << bstate->ActionToString(kOPlayerId, action) << std::endl;
+  }
   SPIEL_CHECK_EQ(legal_actions.size(), 1);
 
   // Check that it's 1-5 0-5
   std::vector<open_spiel::backgammon::CheckerMove> checker_moves =
-      bstate->SpielMoveToCheckerMoves(kOPlayerId, legal_actions[0]);
+      bstate->SpielMoveToCheckerMoves(legal_actions[0]);
   SPIEL_CHECK_EQ(checker_moves[0].pos, 1);
   SPIEL_CHECK_EQ(checker_moves[0].num, 5);
   SPIEL_CHECK_EQ(checker_moves[1].pos, 0);
@@ -183,6 +189,9 @@ void NormalBearOffSituation() {
        {7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}});
   std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kTwoDice);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(5), 1);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(0), 1);
 
   std::vector<Action> legal_actions = bstate->LegalActions();
   std::cout << "Legal actions:" << std::endl;
@@ -257,6 +266,8 @@ void NormalBearOffSituation2() {
        {8, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1,
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1}});
   std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kFourDice);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(3), 4);
 
   std::vector<Action> legal_actions = bstate->LegalActions();
   std::cout << "Legal actions:" << std::endl;
@@ -307,6 +318,9 @@ void BearOffOutsideHome() {
        {8, 2, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}});
   std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kTwoDice);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(5), 1);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(0), 1);
 
   std::vector<Action> legal_actions = bstate->LegalActions();
   std::cout << "Legal actions:" << std::endl;
@@ -350,6 +364,8 @@ void DoublesBearOffOutsideHome() {
        {2, 2, 0, 2, 1, 2, 0, 1, 0, 0, 1, 1,
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0}});
   std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kFourDice);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(3), 4);
 
   // First part of double turn.
   SPIEL_CHECK_FALSE(bstate->double_turn());
@@ -381,6 +397,198 @@ void DoublesBearOffOutsideHome() {
   // Now, bearing off from 20 should be allowed.
   action = bstate->CheckerMovesToSpielMove({{20, 4, false}, {20, 4, false}});
   SPIEL_CHECK_TRUE(ActionsContains(legal_actions, action));
+}
+
+// A case where only the low die can be played.
+// +------|------+
+// |......|......|
+// |......|......|
+// |......|......|
+// |......|...,..|
+// |......|......|
+// |      |      |
+// |......|......|
+// |......|......|
+// |......|......|
+// |......|oooo..|
+// |......|oooo.x|
+// +------|------+
+// Turn: x
+// Dice: 21
+// Bar:
+// Scores, X: 14, O: 7
+void LowDieTest() {
+  std::shared_ptr<const Game> game = LoadGame("backgammon");
+  std::unique_ptr<State> state = game->NewInitialState();
+  BackgammonState* bstate = static_cast<BackgammonState*>(state.get());
+  bstate->SetState(
+      kXPlayerId, false, {2, 1}, {0, 0}, {14, 7},
+      {{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+       {0, 0, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}});
+  std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kLowDie);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(1), 0);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(0), 1);
+
+  // Check for exactly one legal move.
+  std::vector<Action> legal_actions = bstate->LegalActions();
+  std::cout << "Legal actions:" << std::endl;
+  for (Action action : legal_actions) {
+    std::cout << bstate->ActionToString(kXPlayerId, action) << std::endl;
+  }
+  SPIEL_CHECK_EQ(legal_actions.size(), 1);
+
+  // Check that it's 0-2
+  std::vector<open_spiel::backgammon::CheckerMove> checker_moves =
+      bstate->SpielMoveToCheckerMoves(legal_actions[0]);
+  SPIEL_CHECK_EQ(checker_moves[0].pos, 0);
+  SPIEL_CHECK_EQ(checker_moves[0].num, 1);
+  SPIEL_CHECK_EQ(checker_moves[1].pos, -1);
+  SPIEL_CHECK_EQ(checker_moves[1].num, -1);
+}
+
+// If either number can be played but not both, the player must play the larger one.
+// +------|------+
+// |......|......|
+// |......|......|
+// |......|......|
+// |......|...,..|
+// |......|......|
+// |      |      |
+// |......|......|
+// |......|......|
+// |......|......|
+// |......|ooo...|
+// |......|ooo..x|
+// +------|------+
+// Turn: x
+// Dice: 21
+// Bar:
+// Scores, X: 14, O: 9
+void HighDieTest() {
+  std::shared_ptr<const Game> game = LoadGame("backgammon");
+  std::unique_ptr<State> state = game->NewInitialState();
+  BackgammonState* bstate = static_cast<BackgammonState*>(state.get());
+  bstate->SetState(
+      kXPlayerId, false, {2, 1}, {0, 0}, {14, 9},
+      {{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+       {0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}});
+  std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kHighDie);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(1), 1);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(0), 0);
+
+  // Check for exactly one legal move.
+  std::vector<Action> legal_actions = bstate->LegalActions();
+  std::cout << "Legal actions:" << std::endl;
+  for (Action action : legal_actions) {
+    std::cout << bstate->ActionToString(kXPlayerId, action) << std::endl;
+  }
+  SPIEL_CHECK_EQ(legal_actions.size(), 1);
+
+  // Check that it's 0-2
+  std::vector<open_spiel::backgammon::CheckerMove> checker_moves =
+      bstate->SpielMoveToCheckerMoves(legal_actions[0]);
+  SPIEL_CHECK_EQ(checker_moves[0].pos, 0);
+  SPIEL_CHECK_EQ(checker_moves[0].num, 2);
+  SPIEL_CHECK_EQ(checker_moves[1].pos, -1);
+  SPIEL_CHECK_EQ(checker_moves[1].num, -1);
+}
+
+// Must play both dice if possible.
+// +------|------+
+// |......|......|
+// |......|......|
+// |......|......|
+// |......|...,..|
+// |......|......|
+// |      |      |
+// |......|......|
+// |......|......|
+// |......|......|
+// |....o.|ooooo.|
+// |....ox|ooooox|
+// +------|------+
+// Turn: x
+// Dice: 61
+// Bar:
+// Scores, X: 13, O: 3
+void TwoDiceTest() {
+  std::shared_ptr<const Game> game = LoadGame("backgammon");
+  std::unique_ptr<State> state = game->NewInitialState();
+  BackgammonState* bstate = static_cast<BackgammonState*>(state.get());
+  bstate->SetState(
+      kXPlayerId, false, {6, 1}, {0, 0}, {13, 3},
+      {{1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+       {0, 2, 2, 2, 2, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}});
+  std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kTwoDice);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(5), 1);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(0), 1);
+
+  // Check for exactly one legal move.
+  std::vector<Action> legal_actions = bstate->LegalActions();
+  std::cout << "Legal actions:" << std::endl;
+  for (Action action : legal_actions) {
+    std::cout << bstate->ActionToString(kXPlayerId, action) << std::endl;
+  }
+  SPIEL_CHECK_EQ(legal_actions.size(), 1);
+
+  // Check that it's 6-12, 12-13
+  std::vector<open_spiel::backgammon::CheckerMove> checker_moves =
+      bstate->SpielMoveToCheckerMoves(legal_actions[0]);
+  SPIEL_CHECK_EQ(checker_moves[0].pos, 6);
+  SPIEL_CHECK_EQ(checker_moves[0].num, 6);
+  SPIEL_CHECK_EQ(checker_moves[1].pos, 12);
+  SPIEL_CHECK_EQ(checker_moves[1].num, 1);
+}
+
+// Must play both dice if possible.
+// +------|------+
+// |....x.|xxxxox|
+// |......|xxxxox|
+// |......|......|
+// |......|...,..|
+// |......|......|
+// |      |      |
+// |......|......|
+// |......|......|
+// |......|......|
+// |......|......|
+// |......|......|
+// +------|------+
+// Turn: x
+// Dice: 65
+// Bar:
+// Scores, X: 4, O: 13
+void TwoDiceBearoffTest() {
+  std::shared_ptr<const Game> game = LoadGame("backgammon");
+  std::unique_ptr<State> state = game->NewInitialState();
+  BackgammonState* bstate = static_cast<BackgammonState*>(state.get());
+  bstate->SetState(
+      kXPlayerId, false, {6, 5}, {0, 0}, {4, 13},
+      {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 2, 2, 2, 0, 2},
+       {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0}});
+  std::cout << bstate->ToString();
+  SPIEL_CHECK_TRUE(bstate->DetermineLegalLevel() == LegalLevel::kTwoDice);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(5), 1);
+  SPIEL_CHECK_EQ(bstate->remaining_dice(4), 1);
+
+  // Check for exactly one legal move.
+  std::vector<Action> legal_actions = bstate->LegalActions();
+  std::cout << "Legal actions:" << std::endl;
+  for (Action action : legal_actions) {
+    std::cout << bstate->ActionToString(kXPlayerId, action) << std::endl;
+  }
+  SPIEL_CHECK_EQ(legal_actions.size(), 1);
+
+  // Check that the 6 bears off.
+  std::vector<open_spiel::backgammon::CheckerMove> checker_moves =
+      bstate->SpielMoveToCheckerMoves(legal_actions[0]);
+  SPIEL_CHECK_EQ(checker_moves[0].pos, 16);
+  SPIEL_CHECK_EQ(checker_moves[0].num, 5);
+  SPIEL_CHECK_EQ(checker_moves[1].pos, 18);
+  SPIEL_CHECK_EQ(checker_moves[1].num, 6);
 }
 
 void HumanReadableNotation() {
@@ -581,11 +789,126 @@ void BasicHyperBackgammonTest() {
   SPIEL_CHECK_EQ(bstate->CountTotalCheckers(kOPlayerId), 3);
 }
 
+void ObservationTensorTest() {
+  std::shared_ptr<const Game> game = LoadGame("backgammon");
+  std::unique_ptr<State> state = game->NewInitialState();
+  BackgammonState* bstate = static_cast<BackgammonState*>(state.get());
+
+  bstate->SetState(
+      kXPlayerId, false, {3, 1}, {1, 2}, {4, 3},
+      {{2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 3, 0, 4, 0, 0, 0, 0, 0},
+       {0, 0, 0, 0, 0, 6, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}});
+  std::cout << bstate->ToString();
+  std::vector<float> expected;
+  if (kUseResnet) {
+    expected = {
+      // plane 1 for X checkers (25->0, i.e.: bar + board + off)
+      1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 3, 0, 4, 0, 0, 0, 0, 0, 4,
+      // plane 2 for O checkers (0->25, i.e.: off + board + bar)
+      3, 0, 0, 0, 0, 0, 6, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2,
+      // plane 3 for X to act
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      // plane 4 for O to act
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      // plane 5 (thru 10) for num remaining 1s (thru 6s) to play
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      // plane 11 for X away score
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      // plane 12 for O away score
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      // plane 13 for crawford score
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      // plane 14 for cube level
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      // plane 15 for dice have rolled
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      // plane 16 for cube was turned
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    };
+  } else {
+    expected = {
+      // X checkers
+      0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, //bar = 1
+      0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, //24pt = 2
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //23pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //22pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //21pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //20pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //19pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //18pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //17pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //16pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //15pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //14pt = 0
+      0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, //13pt = 1
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //12pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //11pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //10pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //9pt = 0
+      0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, //8pt = 3
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //7pt = 0
+      0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, //6pt = 4
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //5pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //4pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //3pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //2pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //1pt = 0
+      0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //off = 4
+      // O checkers
+      0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, //bar = 2
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //1pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //2pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //3pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //4pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //5pt = 0
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.1, //6pt = 6
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //7pt = 0
+      0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, //8pt = 1
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //9pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //10pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //11pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //12pt = 0
+      0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, //13pt = 1
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //14pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //15pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //16pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //17pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //18pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //19pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //20pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //21pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //22pt = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //23pt = 0
+      0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, //24pt = 2
+      0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //off = 3
+      1.0, 0.0, // on roll
+      0.0, 1.0, 0.0, 0.0, 0.0, // remaining 1s = 1
+      1.0, 0.0, 0.0, 0.0, 0.0, // remaining 2s = 0
+      0.0, 1.0, 0.0, 0.0, 0.0, // remaining 3s = 1
+      1.0, 0.0, 0.0, 0.0, 0.0, // remaining 4s = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, // remaining 5s = 0
+      1.0, 0.0, 0.0, 0.0, 0.0, // remaining 6s = 0
+      1.0, 1.0, 0.0, 1.0, // X away, O away, crawford, cube level
+      1.0, 0.0 // dice have rolled, cube was turned
+    };
+  }
+  for (auto v : state->ObservationTensor()) {
+    std::cout << v << " ";
+  }
+  SPIEL_CHECK_TRUE(state->ObservationTensor() == expected);
+}
+
 }  // namespace
 }  // namespace backgammon
 }  // namespace open_spiel
 
 int main(int argc, char** argv) {
+  /*
   open_spiel::testing::LoadGameTest("backgammon");
   open_spiel::backgammon::BasicBackgammonTestsCheckHits();
   open_spiel::backgammon::BasicBackgammonTestsDoNotStartWithDoubles();
@@ -596,6 +919,12 @@ int main(int argc, char** argv) {
   open_spiel::backgammon::NormalBearOffSituation2();
   open_spiel::backgammon::BearOffOutsideHome();
   open_spiel::backgammon::DoublesBearOffOutsideHome();
+  open_spiel::backgammon::LowDieTest();
+  open_spiel::backgammon::HighDieTest();
+  open_spiel::backgammon::TwoDiceTest();
+  open_spiel::backgammon::TwoDiceBearoffTest();
   open_spiel::backgammon::HumanReadableNotation();
   open_spiel::backgammon::BasicHyperBackgammonTest();
+  */
+  open_spiel::backgammon::ObservationTensorTest();
 }

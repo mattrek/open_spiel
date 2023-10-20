@@ -95,25 +95,54 @@ struct Trajectory {
     open_spiel::Action action;
     open_spiel::ActionsAndProbs policy;
     double value;
+    double accum_luck;  // always for player 0 (i.e. not current_player)
   };
 
   std::vector<State> states;
   std::vector<double> returns;
 };
 
+double EvaluateLuck(
+    const open_spiel::State& state,
+    open_spiel::Action action,
+    std::shared_ptr<Evaluator> evaluator) {
+  SPIEL_CHECK_TRUE(state.IsChanceNode());
+  double avg_value = 0;
+  double action_value = 0;
+  bool found = false;
+  for (auto& pair : state.ChanceOutcomes()) {
+    std::unique_ptr<open_spiel::State> temp_state = state.Clone();
+    open_spiel::Action temp_action = pair.first;
+    double temp_prob = pair.second;
+    temp_state->ApplyAction(temp_action);
+    double temp_value = evaluator->Evaluate(*temp_state)[0];
+    if (temp_action == action) {
+      SPIEL_CHECK_FALSE(found);
+      found = true;
+      action_value = temp_value;
+    }
+    avg_value += temp_prob * temp_value;
+  }
+  SPIEL_CHECK_TRUE(found);
+  return action_value - avg_value;
+}
+
 Trajectory PlayGame(Logger* logger, int game_num, const open_spiel::Game& game,
                     std::vector<std::unique_ptr<MCTSBot>>* bots,
+                    std::shared_ptr<Evaluator> evaluator,
                     std::mt19937* rng, double temperature, int temperature_drop,
-                    double cutoff_value, bool verbose = false) {
+                    double cutoff_value, bool verbose = true) {
   std::unique_ptr<open_spiel::State> state = game.NewInitialState();
   std::vector<std::string> history;
   Trajectory trajectory;
+  double accum_luck = 0;
 
   while (true) {
     if (state->IsChanceNode()) {
       open_spiel::ActionsAndProbs outcomes = state->ChanceOutcomes();
       open_spiel::Action action =
           open_spiel::SampleAction(outcomes, *rng).first;
+      accum_luck += EvaluateLuck(*state, action, evaluator);
       state->ApplyAction(action);
     } else {
       open_spiel::Player player = state->CurrentPlayer();
@@ -122,33 +151,68 @@ Trajectory PlayGame(Logger* logger, int game_num, const open_spiel::Game& game,
       policy.reserve(root->children.size());
       for (const SearchNode& c : root->children) {
         policy.emplace_back(c.action,
-                            std::pow(c.explore_count, 1.0 / temperature));
+            // mattrek: greedy:  use values instead of explore count
+            /*
+            std::pow(
+                game.MaxUtility() +
+                  (c.explore_count > 0 ? c.total_reward / c.explore_count : 0.0),
+                1.0 / temperature));
+            */
+            std::pow(c.explore_count, 1.0 / temperature));
       }
       NormalizePolicy(&policy);
-      open_spiel::Action action;
+      // mattrek: TODO add SampleFromChildren func, reuse in mcts.cc
+      const SearchNode* action_node;
       if (history.size() >= temperature_drop) {
-        action = root->BestChild().action;
+        action_node = &(root->BestChild());
       } else {
+        open_spiel::Action action;
         action = open_spiel::SampleAction(policy, *rng).first;
+        for (const SearchNode& child : root->children) {
+          if (child.action == action) {
+            action_node = &child;
+            break;
+          }
+        }
       }
 
-      double root_value = root->total_reward / root->explore_count;
+      // mattrek: Assert best_child.player == player, since this should always
+      // be the case given how MCTSearch expands root node's children.
+      SPIEL_CHECK_TRUE(action_node->player == player);
+      // mattrek: When adding this state into the trajectory, assign it the
+      // value of the chosen action.  Do not use the MCTS search value for this,
+      // use the vpnet's evaluation.  (The MCTS value is distorted from uct_c
+      // exploration).  An exception is made for chance nodes, as the vpnet
+      // cannot evaluate them, and their children are visited independent
+      // of uct_c.
+      //bool action_node_becomes_chance = (!action_node->children.empty())
+      //    && action_node->children[0].player == kChancePlayerId;
+      bool action_node_becomes_chance = false; // dont use, chance value not weighted by priors
+      double action_value =
+          action_node->outcome.empty()
+              ? (action_node_becomes_chance
+                  ? (action_node->total_reward / action_node->explore_count)
+//                  * (action_node->player == player ? 1 : -1)
+                  : action_node->eval)
+              : action_node->outcome[player];
       trajectory.states.push_back(Trajectory::State{
-          state->ObservationTensor(), player, state->LegalActions(), action,
-          std::move(policy), root_value});
-      std::string action_str = state->ActionToString(player, action);
+          state->ObservationTensor(), player, state->LegalActions(),
+          action_node->action, std::move(policy), action_value, accum_luck});
+      std::string action_str =
+          state->ActionToString(player, action_node->action);
       history.push_back(action_str);
-      state->ApplyAction(action);
+      state->ApplyAction(action_node->action);
       if (verbose) {
-        logger->Print("Player: %d, action: %s", player, action_str);
+        logger->Print("Player: %d, action: %s, value: %6.3f, accum_luck: %6.3f",
+            player, action_str, action_value, accum_luck);
       }
       if (state->IsTerminal()) {
         trajectory.returns = state->Returns();
         break;
-      } else if (std::abs(root_value) > cutoff_value) {
+      } else if (std::abs(action_value) > cutoff_value) {
         trajectory.returns.resize(2);
-        trajectory.returns[player] = root_value;
-        trajectory.returns[1 - player] = -root_value;
+        trajectory.returns[player] = action_value;
+        trajectory.returns[1 - player] = -action_value;
         break;
       }
     }
@@ -165,11 +229,12 @@ std::unique_ptr<MCTSBot> InitAZBot(const AlphaZeroConfig& config,
                                    std::shared_ptr<Evaluator> evaluator,
                                    bool evaluation) {
   return std::make_unique<MCTSBot>(
-      game, std::move(evaluator), config.uct_c, config.max_simulations,
+      game, std::move(evaluator), config.uct_c,
+      config.min_simulations, config.max_simulations,
       /*max_memory_mb=*/10,
       /*solve=*/false,
       /*seed=*/0,
-      /*verbose=*/false, ChildSelectionPolicy::PUCT,
+      /*verbose=*/true, ChildSelectionPolicy::PUCT,
       evaluation ? 0 : config.policy_alpha,
       evaluation ? 0 : config.policy_epsilon,
       /*dont_return_chance_node*/ true);
@@ -185,19 +250,19 @@ void actor(const open_spiel::Game& game, const AlphaZeroConfig& config, int num,
   } else {
     logger.reset(new NoopLogger());
   }
-  std::mt19937 rng;
+  std::mt19937 rng(absl::ToUnixNanos(absl::Now()));
   absl::uniform_real_distribution<double> dist(0.0, 1.0);
   std::vector<std::unique_ptr<MCTSBot>> bots;
   bots.reserve(2);
   for (int player = 0; player < 2; player++) {
-    bots.push_back(InitAZBot(config, game, vp_eval, false));
+    bots.push_back(InitAZBot(config, game, vp_eval, /*evaluation=*/false));
   }
   for (int game_num = 1; !stop->StopRequested(); ++game_num) {
     double cutoff =
         (dist(rng) < config.cutoff_probability ? config.cutoff_value
                                                : game.MaxUtility() + 1);
     if (!trajectory_queue->Push(
-            PlayGame(logger.get(), game_num, game, &bots, &rng,
+            PlayGame(logger.get(), game_num, game, &bots, vp_eval, &rng,
                      config.temperature, config.temperature_drop, cutoff),
             absl::Seconds(10))) {
       logger->Print("Failed to push a trajectory after 10 seconds.");
@@ -267,9 +332,10 @@ void evaluator(const open_spiel::Game& game, const AlphaZeroConfig& config,
         config.max_simulations * std::pow(10, difficulty / 2.0);
     std::vector<std::unique_ptr<MCTSBot>> bots;
     bots.reserve(2);
-    bots.push_back(InitAZBot(config, game, vp_eval, true));
+    bots.push_back(InitAZBot(config, game, vp_eval, /*evaluation=*/true));
     bots.push_back(std::make_unique<MCTSBot>(
-        game, rand_evaluator, config.uct_c, rand_max_simulations,
+        game, rand_evaluator, config.uct_c,
+        /*min_simulations=*/0, rand_max_simulations,
         /*max_memory_mb=*/1000,
         /*solve=*/true,
         /*seed=*/num * 1000 + game_num,
@@ -283,7 +349,7 @@ void evaluator(const open_spiel::Game& game, const AlphaZeroConfig& config,
 
     logger.Print("Running MCTS with %d simulations", rand_max_simulations);
     Trajectory trajectory = PlayGame(
-        &logger, game_num, game, &bots, &rng, /*temperature=*/1,
+        &logger, game_num, game, &bots, vp_eval, &rng, /*temperature=*/1,
         /*temperature_drop=*/0, /*cutoff_value=*/game.MaxUtility() + 1);
 
     results->Add(difficulty, trajectory.returns[az_player]);
@@ -295,12 +361,60 @@ void evaluator(const open_spiel::Game& game, const AlphaZeroConfig& config,
   logger.Print("Got a quit.");
 }
 
+// Returns the 'lambda' discounted value of all future values of 'trajectory',
+// including its outcome, beginning at 'state_idx'.  The calculation is
+// truncated after 'td_n_steps' if that parameter is greater than zero.
+double TdLambdaReturns(const Trajectory& trajectory, int state_idx,
+                       double td_lambda, int td_n_steps) {
+  const Trajectory::State& s_state = trajectory.states[state_idx];
+  double accum_luck = s_state.accum_luck;
+  double outcome = trajectory.returns[0]
+      - (trajectory.states.back().accum_luck - accum_luck);
+  outcome = std::max(-1.0, std::min(1.0, outcome));
+  if (td_lambda >= 1.0 || Near(td_lambda, 1.0)) {
+    // lambda == 1.0 simplifies to returning the outcome (or value at nth-step)
+    if (td_n_steps <= 0) {
+      return outcome;
+    }
+    int idx = state_idx + td_n_steps;
+    if (idx >= trajectory.states.size()) {
+      return outcome;
+    }
+    const Trajectory::State& n_state = trajectory.states[idx];
+    return n_state.value * (n_state.current_player == 0 ? 1 : -1)
+        - (n_state.accum_luck - accum_luck);
+  }
+  double retval = s_state.value * (s_state.current_player == 0 ? 1 : -1);
+  if (td_lambda <= 0.0 || Near(td_lambda, 0.0)) {
+    // lambda == 0 simplifies to returning the start state's value
+    return retval;
+  }
+  double lambda_inv = (1.0 - td_lambda);
+  double lambda_pow = td_lambda;
+  retval *= lambda_inv;
+  for (int i = state_idx + 1; i < trajectory.states.size(); ++i) {
+    const Trajectory::State& i_state = trajectory.states[i];
+    double value = i_state.value * (i_state.current_player == 0 ? 1 : -1)
+        - (i_state.accum_luck - accum_luck);
+    if (td_n_steps > 0 && i == state_idx + td_n_steps) {
+      retval += lambda_pow * value;
+      return retval;
+    }
+    retval += lambda_inv * lambda_pow * value;
+    lambda_pow *= td_lambda;
+  }
+  retval += lambda_pow * outcome;
+  return retval;
+}
+
 void learner(const open_spiel::Game& game, const AlphaZeroConfig& config,
              DeviceManager* device_manager,
+             DeviceManager* cpu_device_manager,
              std::shared_ptr<VPNetEvaluator> eval,
              ThreadedQueue<Trajectory>* trajectory_queue,
              EvalResults* eval_results, StopToken* stop,
-             const StartInfo& start_info) {
+             const StartInfo& start_info,
+             bool verbose = false) {
   FileLogger logger(config.path, "learner", "a");
   DataLoggerJsonLines data_logger(
       config.path, "learner", true, "a", start_info.start_time);
@@ -357,10 +471,39 @@ void learner(const open_spiel::Game& game, const AlphaZeroConfig& config,
         double p1_outcome = trajectory->returns[0];
         outcomes.Add(p1_outcome > 0 ? 0 : (p1_outcome < 0 ? 1 : 2));
 
-        for (const Trajectory::State& state : trajectory->states) {
+        for (int i = 0; i < trajectory->states.size(); ++i ) {
+          const Trajectory::State& state = trajectory->states[i];
+          for (Action action : state.legal_actions) {
+            if (action < 0 || action >= 155) {
+              std::cerr << "Bad training inputs in learner legal_actions: " << std::endl
+                  << "Legal actions: " << state.legal_actions << std::endl
+                  << "Observations: " << state.observation << std::endl
+                  << "Policy: " << state.policy << std::endl;
+            }
+          }
+          for (const auto& pol : state.policy) {
+            Action action = pol.first;
+            if (action < 0 || action >= 155) {
+              std::cerr << "Bad training inputs in learner policy: " << std::endl
+                  << "Legal actions: " << state.legal_actions << std::endl
+                  << "Observations: " << state.observation << std::endl
+                  << "Policy: " << state.policy << std::endl;
+            }
+          }
+          double value = TdLambdaReturns(*trajectory, i,
+                                         config.td_lambda, config.td_n_steps);
+          value *= (state.current_player == 0
+                      || !open_spiel::kPlayerCentricObs) ? 1 : -1;
+
           replay_buffer.Add(VPNetModel::TrainInputs{state.legal_actions,
                                                     state.observation,
-                                                    state.policy, p1_outcome});
+                                                    state.policy,
+                                                    value});
+          if (verbose && num_trajectories == 1) {
+            double v0 = state.value * (state.current_player == 0 ? 1 : -1);
+            logger.Print("Idx: %d  Player: %d  Value0: %0.3f  Accum: %0.3f  TrainTo: %0.3f",
+                i, state.current_player, v0, state.accum_luck, value);
+          }
           num_states += 1;
         }
 
@@ -424,12 +567,13 @@ void learner(const open_spiel::Game& game, const AlphaZeroConfig& config,
     if (step % config.checkpoint_freq == 0) {
       device_manager->Get(0, device_id)->SaveCheckpoint(step);
     }
-    if (device_manager->Count() > 0) {
-      for (int i = 0; i < device_manager->Count(); ++i) {
-        if (i != device_id) {
-          device_manager->Get(0, i)->LoadCheckpoint(checkpoint_path);
-        }
+    for (int i = 0; i < device_manager->Count(); ++i) {
+      if (i != device_id) {
+        device_manager->Get(0, i)->LoadCheckpoint(checkpoint_path);
       }
+    }
+    for (int i = 0; i < cpu_device_manager->Count(); ++i) {
+      cpu_device_manager->Get(0, i)->LoadCheckpoint(checkpoint_path);
     }
     logger.Print("Checkpoint saved: %s", checkpoint_path);
 
@@ -513,6 +657,8 @@ bool AlphaZero(AlphaZeroConfig config, StopToken* stop, bool resuming) {
 
   std::cout << "Logging directory: " << config.path << std::endl;
 
+  // TODO(mattrek): File vpnet.pb doesn't get updated when config.json changes.
+  // => BUG: Changing learning_rate, weight_decay in config.json has no effect.
   if (config.graph_def.empty()) {
     config.graph_def = "vpnet.pb";
     std::string model_path = absl::StrCat(config.path, "/", config.graph_def);
@@ -576,6 +722,10 @@ bool AlphaZero(AlphaZeroConfig config, StopToken* stop, bool resuming) {
     return false;
   }
 
+  DeviceManager cpu_device_manager;
+  cpu_device_manager.AddDevice(
+        VPNetModel(*game, config.path, config.graph_def, "/cpu:0"));
+
   std::cerr << "Loading model from step " << start_info.model_checkpoint_step
             << std::endl;
   {  // Make sure they're all in sync.
@@ -586,11 +736,37 @@ bool AlphaZero(AlphaZeroConfig config, StopToken* stop, bool resuming) {
       device_manager.Get(0, i)->LoadCheckpoint(
           start_info.model_checkpoint_step);
     }
+    for (int i = 0; i < cpu_device_manager.Count(); ++i) {
+      cpu_device_manager.Get(0, i)->LoadCheckpoint(
+          start_info.model_checkpoint_step);
+    }
   }
 
   auto eval = std::make_shared<VPNetEvaluator>(
       &device_manager, config.inference_batch_size, config.inference_threads,
       config.inference_cache, (config.actors + config.evaluators) / 16);
+
+  // mattrek: Unbatched inference always slower on gpu; use cpu for actors,evaluators.
+  bool useCpuOnlyInference = config.inference_batch_size <= 1
+      && device_manager.Get(0,0)->Device().find("cpu") == std::string::npos;
+  if (useCpuOnlyInference) {
+    std::cerr << "Using cpu_only inference for actors/evaluators." << std::endl;
+  }
+
+  auto inf_eval = std::make_shared<VPNetEvaluator>(
+      useCpuOnlyInference ? &cpu_device_manager : &device_manager,
+      config.inference_batch_size, config.inference_threads,
+      config.inference_cache, (config.actors + config.evaluators) / 16);
+  /*
+  std::vector<std::shared_ptr<VPNetEvaluator>> inf_evals;
+  inf_evals.reserve(config.actors + config.evaluators);
+  for (int i = 0; i < config.actors + config.evaluators; ++i) {
+    inf_evals.push_back(std::make_shared<VPNetEvaluator>(
+        useCpuOnlyInference ? &cpu_device_manager : &device_manager,
+        config.inference_batch_size, config.inference_threads,
+        config.inference_cache, (config.actors + config.evaluators) / 16));
+  }
+  */
 
   ThreadedQueue<Trajectory> trajectory_queue(config.replay_buffer_size /
                                              config.replay_buffer_reuse);
@@ -601,16 +777,16 @@ bool AlphaZero(AlphaZeroConfig config, StopToken* stop, bool resuming) {
   actors.reserve(config.actors);
   for (int i = 0; i < config.actors; ++i) {
     actors.emplace_back(
-        [&, i]() { actor(*game, config, i, &trajectory_queue, eval, stop); });
+        [&, i]() { actor(*game, config, i, &trajectory_queue, inf_eval, stop); });
   }
   std::vector<Thread> evaluators;
   evaluators.reserve(config.evaluators);
   for (int i = 0; i < config.evaluators; ++i) {
     evaluators.emplace_back(
-        [&, i]() { evaluator(*game, config, i, &eval_results, eval, stop); });
+        [&, i]() { evaluator(*game, config, i, &eval_results, inf_eval, stop); });
   }
-  learner(*game, config, &device_manager, eval, &trajectory_queue,
-          &eval_results, stop, start_info);
+  learner(*game, config, &device_manager, &cpu_device_manager, eval, &trajectory_queue,
+          &eval_results, stop, start_info, /*verbose=*/false);
 
   if (!stop->StopRequested()) {
     stop->Stop();

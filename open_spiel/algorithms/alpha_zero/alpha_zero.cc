@@ -124,6 +124,7 @@ std::unique_ptr<MCTSBot> InitAZBot(
       game,
       std::move(evaluator),
       config.uct_c,
+      config.min_simulations,
       config.max_simulations,
       /*max_memory_mb=*/ 10,
       /*solve=*/ false,
@@ -231,6 +232,7 @@ void evaluator(const open_spiel::Game& game, const AlphaZeroConfig& config,
             game,
             rand_evaluator,
             config.uct_c,
+            /*min_simulations=*/0,
             rand_max_simulations,
             /*max_memory_mb=*/1000,
             /*solve=*/true,
@@ -313,13 +315,18 @@ void learner(const open_spiel::Game& game,
         double p1_outcome = trajectory->returns[0];
         outcomes.Add(p1_outcome > 0 ? 0 : (p1_outcome < 0 ? 1 : 2));
 
+        int steps = trajectory->states.size() - 1;
         for (const Trajectory::State& state : trajectory->states) {
+          double lambda = std::pow(0.9, steps);
+          double lambda_weighted_outcome = (1.0 - lambda) * state.value + lambda * p1_outcome;
+          --steps;
           replay_buffer.Add(
               VPNetModel::TrainInputs{
                   state.legal_actions,
                   state.observation,
                   state.policy,
-                  p1_outcome});
+                  lambda_weighted_outcome});
+                  //p1_outcome});
           num_states += 1;
         }
 

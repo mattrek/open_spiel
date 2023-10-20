@@ -68,20 +68,25 @@ class DeviceManager {
 
   // Gives the device with the fewest outstanding requests.
   DeviceLoan Get(int requests, int device_id = -1) {
-    absl::MutexLock lock(&m_);
-    if (device_id < 0) {
-      // The starting device changes depending on if we are allowed to
-      // use the first device or not.
-      device_id = 0 + (learning_ && multiple_devices_);
-      for (int i = 1 + (learning_ && multiple_devices_); i < devices.size();
-           ++i) {
-        if (devices[i].requests < devices[device_id].requests) {
-          device_id = i;
+    // Avoid unnecessary locking when single device
+    if (!multiple_devices_) {
+      return DeviceLoan(this, &devices[0].model, device_id, requests);
+    } else {
+      absl::MutexLock lock(&m_);
+      if (device_id < 0) {
+        // The starting device changes depending on if we are allowed to
+        // use the first device or not.
+        device_id = 0 + (learning_ && multiple_devices_);
+        for (int i = 1 + (learning_ && multiple_devices_); i < devices.size();
+             ++i) {
+          if (devices[i].requests < devices[device_id].requests) {
+            device_id = i;
+          }
         }
       }
+      devices[device_id].requests += requests;
+      return DeviceLoan(this, &devices[device_id].model, device_id, requests);
     }
-    devices[device_id].requests += requests;
-    return DeviceLoan(this, &devices[device_id].model, device_id, requests);
   }
 
   // A member to ensure that when device:0 is learning and there are
@@ -94,8 +99,11 @@ class DeviceManager {
 
  private:
   void Return(int device_id, int requests) {
-    absl::MutexLock lock(&m_);
-    devices[device_id].requests -= requests;
+    // Avoid unnecessary locking when single device
+    if (multiple_devices_) {
+      absl::MutexLock lock(&m_);
+      devices[device_id].requests -= requests;
+    }
   }
 
   struct Device {

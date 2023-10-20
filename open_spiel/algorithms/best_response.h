@@ -41,28 +41,15 @@ namespace algorithms {
 //
 // A partially computed best-response can be computed when using a
 // prob_cut_threshold >= 0.
-//
-// The max-entropy best-response policy is computed if a non-negative
-// `action_value_tolerance` is used.
-// Support is equally split between actions whose values are within
-// `action_value_tolerance` of the max-value action.
-//
-// NOTE: if `action_value_tolerance` is negative, the first action with max
-// value is selected and a biased determinisitc BR is computed. This may
-// implicitly simplify coordination games by introducing a convention in games
-// that require coordination.
-
 class TabularBestResponse {
  public:
   TabularBestResponse(const Game& game, Player best_responder,
                       const Policy* policy,
-                      const float prob_cut_threshold = -1.0,
-                      const float action_value_tolerance = -1.0);
+                      const float prob_cut_threshold = -1.0);
   TabularBestResponse(
       const Game& game, Player best_responder,
       const std::unordered_map<std::string, ActionsAndProbs>& policy_table,
-      const float prob_cut_threshold = -1.0,
-      const float action_value_tolerance = -1.0);
+      const float prob_cut_threshold = -1.0);
 
   TabularBestResponse(TabularBestResponse&&) = default;
 
@@ -104,22 +91,16 @@ class TabularBestResponse {
   // When two actions have the same value, we
   // return the action with the lowest number (as an int).
   std::unordered_map<std::string, Action> GetBestResponseActions() {
-    if (action_value_tolerance_ >= 0.0)
-      SpielFatalError(
-          "TabularBestResponse is returning the max-entropy best-response but "
-          "deterministic best-response is requested.");
-    // If the best_response_policy_ cache is empty, we fill it by
-    // calculating all best responses, starting at the root.
+    // If the best_response_actions_ cache is empty, we fill it by calculating
+    // all best responses, starting at the root.
     if (best_response_actions_.empty()) Value(*root_);
     return best_response_actions_;
   }
 
   // Returns the computed best response as a policy object.
   TabularPolicy GetBestResponsePolicy() {
-    // If the best_response_policy_ cache is empty, we fill it by calculating
-    // all best responses, starting at the root.
-    if (best_response_policy_.empty()) Value(*root_);
-    return TabularPolicy(best_response_policy_);
+    SPIEL_CHECK_TRUE(dummy_policy_ != nullptr);
+    return TabularPolicy(*dummy_policy_, GetBestResponseActions());
   }
 
   // Returns the expected utility for best_responder when playing the game
@@ -134,7 +115,6 @@ class TabularBestResponse {
     policy_ = policy;
     value_cache_.clear();
     best_response_actions_.clear();
-    best_response_policy_.clear();
     // TODO(author1): Replace this with something that traverses the tree
     // and rebuilds the probabilities.
     infosets_ =
@@ -178,10 +158,6 @@ class TabularBestResponse {
   // The probability tolerance for truncating value estimation.
   float prob_cut_threshold_;
 
-  // The tolerance in terms of action values deciding if a maxent BR is
-  // requested.
-  float action_value_tolerance_;
-
   // Maps infoset strings (from the State::InformationState method) to
   // the HistoryNodes that represent all histories with
   // the same information state, along with the counter-factual probability of
@@ -195,10 +171,6 @@ class TabularBestResponse {
       infosets_;
 
   // Caches all best responses calculated so far (for each infostate).
-  std::unordered_map<std::string, ActionsAndProbs> best_response_policy_;
-
-  // Caches all best responses calculated so far (for each infostate) in case of
-  // biased deterministic best-response.
   std::unordered_map<std::string, Action> best_response_actions_;
 
   // Caches all values calculated so far (for each history).

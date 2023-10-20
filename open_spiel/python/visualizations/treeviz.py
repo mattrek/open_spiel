@@ -77,7 +77,7 @@ def default_node_decorator(state):
     attrs["width"] = _WIDTH / 2.
     attrs["height"] = _HEIGHT / 2.
   else:
-    attrs["label"] = str(state.information_state_string())
+    attrs["label"] = str(state.observation_string())
     attrs["shape"] = _PLAYER_SHAPES.get(player, "ellipse")
     attrs["color"] = _PLAYER_COLORS.get(player, "black")
   return attrs

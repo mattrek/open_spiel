@@ -73,7 +73,10 @@ LRUCacheInfo VPNetEvaluator::CacheInfo() {
 std::vector<double> VPNetEvaluator::Evaluate(const State& state) {
   // TODO(author5): currently assumes zero-sum.
   double p0value = Inference(state).value;
-  return {p0value, -p0value};
+  if (state.CurrentPlayer() == 0 || !open_spiel::kPlayerCentricObs)
+    return {p0value, -p0value};
+  else
+    return {-p0value, p0value};
 }
 
 open_spiel::ActionsAndProbs VPNetEvaluator::Prior(const State& state) {

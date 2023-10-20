@@ -18,7 +18,7 @@ from typing import Optional
 from absl import logging
 
 from open_spiel.python.games import dynamic_routing_data
-from open_spiel.python.mfg import games  # pylint: disable=unused-import
+import open_spiel.python.mfg.games as games  # pylint: disable=unused-import
 from open_spiel.python.mfg.games import crowd_modelling_2d
 from open_spiel.python.mfg.games import dynamic_routing
 import pyspiel
@@ -71,12 +71,11 @@ GAME_SETTINGS = {
 GAME_SETTINGS.update({
     "mean_field_lin_quad": GAME_SETTINGS["linear_quadratic"],
     "mfg_crowd_modelling_2d": GAME_SETTINGS["crowd_modelling_2d_10x10"],
-    "mfg_dynamic_routing": GAME_SETTINGS["dynamic_routing_line"],
     "python_mfg_dynamic_routing": GAME_SETTINGS["dynamic_routing_line"],
     "python_mfg_predator_prey": GAME_SETTINGS["predator_prey_5x5x3"],
 })
 
-DYNAMIC_ROUTING_NETWORK = {
+_DYNAMIC_ROUTING_NETWORK = {
     "line": (dynamic_routing_data.LINE_NETWORK,
              dynamic_routing_data.LINE_NETWORK_OD_DEMAND),
     "braess": (dynamic_routing_data.BRAESS_NETWORK,
@@ -109,11 +108,11 @@ def create_game_with_setting(game_name: str,
   logging.info("Creating %s game with parameters: %r", game_name, params)
 
   # Dynamic routing game requires setting the network and demand explicitly.
-  if game_name in ["mfg_dynamic_routing", "python_mfg_dynamic_routing"]:
+  if game_name == "python_mfg_dynamic_routing":
     # Create a copy since we modify it below removing the network key.
     params = params.copy()
     network = params.pop("network")
-    network, od_demand = DYNAMIC_ROUTING_NETWORK[network]
+    network, od_demand = _DYNAMIC_ROUTING_NETWORK[network]
     return dynamic_routing.MeanFieldRoutingGame(
         params, network=network, od_demand=od_demand)
 

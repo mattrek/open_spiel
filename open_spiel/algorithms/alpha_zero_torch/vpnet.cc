@@ -154,17 +154,22 @@ std::vector<VPNetModel::InferenceOutputs> VPNetModel::Inference(
 
   // Torch tensors by default use a dense, row-aligned memory layout.
   //   - Their default data type is a 32-bit float
-  //   - Use the byte data type for boolean
+  //   - Use the byte data type for boolean  (mattrek: obsolete, torch has bool)
 
   torch::Tensor torch_inf_inputs =
       torch::empty({inference_batch_size, flat_input_size_}, torch_device_);
   torch::Tensor torch_inf_legal_mask = torch::full(
       {inference_batch_size, num_actions_}, false,
-      torch::TensorOptions().dtype(torch::kByte).device(torch_device_));
+      torch::TensorOptions().dtype(torch::kBool).device(torch_device_));
 
   for (int batch = 0; batch < inference_batch_size; ++batch) {
     // Copy legal mask(s) to a Torch tensor.
     for (Action action : inputs[batch].legal_actions) {
+      if (action < 0 || action >= 155) {
+        std::cerr << "Bad training inputs in Inference(): " << std::endl
+            << "Legal actions: " << inputs[batch].legal_actions << std::endl
+            << "Observations: " << inputs[batch].observations << std::endl;
+      }
       torch_inf_legal_mask[batch][action] = true;
     }
 
@@ -206,13 +211,13 @@ VPNetModel::LossInfo VPNetModel::Learn(const std::vector<TrainInputs>& inputs) {
 
   // Torch tensors by default use a dense, row-aligned memory layout.
   //   - Their default data type is a 32-bit float
-  //   - Use the byte data type for boolean
+  //   - Use the byte data type for boolean  (mattrek: obsolete, torch has bool)
 
   torch::Tensor torch_train_inputs =
       torch::empty({training_batch_size, flat_input_size_}, torch_device_);
   torch::Tensor torch_train_legal_mask = torch::full(
       {training_batch_size, num_actions_}, false,
-      torch::TensorOptions().dtype(torch::kByte).device(torch_device_));
+      torch::TensorOptions().dtype(torch::kBool).device(torch_device_));
   torch::Tensor torch_policy_targets =
       torch::zeros({training_batch_size, num_actions_}, torch_device_);
   torch::Tensor torch_value_targets =
@@ -221,6 +226,13 @@ VPNetModel::LossInfo VPNetModel::Learn(const std::vector<TrainInputs>& inputs) {
   for (int batch = 0; batch < training_batch_size; ++batch) {
     // Copy the legal mask(s) to a Torch tensor.
     for (Action action : inputs[batch].legal_actions) {
+      if (action < 0 || action >= num_actions_) {
+        std::cerr << "Bad training inputs in Learn() legal_actions: " << std::endl
+            << "Legal actions: " << inputs[batch].legal_actions << std::endl
+            << "Observations: " << inputs[batch].observations << std::endl
+            << "Policy: " << inputs[batch].policy << std::endl;
+        //action = action % num_actions_;
+      }
       torch_train_legal_mask[batch][action] = true;
     }
 
@@ -231,6 +243,13 @@ VPNetModel::LossInfo VPNetModel::Learn(const std::vector<TrainInputs>& inputs) {
 
     // Copy the policy target(s) to a Torch tensor.
     for (const auto& [action, probability] : inputs[batch].policy) {
+      if (action < 0 || action >= 155) {
+        std::cerr << "Bad training inputs in Learn() policy: " << std::endl
+            << "Legal actions: " << inputs[batch].legal_actions << std::endl
+            << "Observations: " << inputs[batch].observations << std::endl
+            << "Policy: " << inputs[batch].policy << std::endl;
+      }
+      //torch_policy_targets[batch][action % num_actions_] = probability;
       torch_policy_targets[batch][action] = probability;
     }
 

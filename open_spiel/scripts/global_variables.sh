@@ -27,7 +27,7 @@
 export DEFAULT_OPTIONAL_DEPENDENCY=${DEFAULT_OPTIONAL_DEPENDENCY:-"OFF"}
 
 # Building the Python API can be disabled by setting this to OFF.
-export OPEN_SPIEL_BUILD_WITH_PYTHON=${OPEN_SPIEL_BUILD_WITH_PYTHON:-"ON"}
+export OPEN_SPIEL_BUILD_WITH_PYTHON=${OPEN_SPIEL_BUILD_WITH_PYTHON:-"OFF"}
 
 # Each optional dependency has their own flag, that defaults to the global
 # "$DEFAULT_OPTIONAL_DEPENDENCY" if undefined. To enable an optional dependency,
@@ -47,7 +47,7 @@ export OPEN_SPIEL_BUILD_WITH_EIGEN="${OPEN_SPIEL_BUILD_WITH_EIGEN:-"OFF"}"
 
 # Download the header-only library, libnop (https://github.com/google/libnop),
 # to support the serialization and deserialization of C++ data types.
-export OPEN_SPIEL_BUILD_WITH_LIBNOP="${OPEN_SPIEL_BUILD_WITH_LIBNOP:-"OFF"}"
+export OPEN_SPIEL_BUILD_WITH_LIBNOP="${OPEN_SPIEL_BUILD_WITH_LIBNOP:-"ON"}"
 
 # Download precompiled binaries for libtorch (PyTorch C++ API).
 # See https://pytorch.org/cppdocs/ for C++ documentation.
@@ -63,7 +63,7 @@ export OPEN_SPIEL_BUILD_WITH_LIBNOP="${OPEN_SPIEL_BUILD_WITH_LIBNOP:-"OFF"}"
 # > as its Python counterpart.
 #
 # You can find an example usage in open_spiel/libtorch/torch_integration_test.cc
-export OPEN_SPIEL_BUILD_WITH_LIBTORCH="${OPEN_SPIEL_BUILD_WITH_LIBTORCH:-"OFF"}"
+export OPEN_SPIEL_BUILD_WITH_LIBTORCH="${OPEN_SPIEL_BUILD_WITH_LIBTORCH:-"ON"}"
 
 # You may want to replace this URL according to your system.
 # You can find all of these (and more) URLs at https://pytorch.org/
@@ -84,7 +84,7 @@ export OPEN_SPIEL_BUILD_WITH_LIBTORCH="${OPEN_SPIEL_BUILD_WITH_LIBTORCH:-"OFF"}"
 #
 # For C++ Libtorch AlphaZero on macOS we recommend this URL:
 # https://download.pytorch.org/libtorch/cpu/libtorch-macos-1.8.0.zip
-export OPEN_SPIEL_BUILD_WITH_LIBTORCH_DOWNLOAD_URL="${OPEN_SPIEL_BUILD_WITH_LIBTORCH_DOWNLOAD_URL:-"https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-1.5.1%2Bcpu.zip"}"
+export OPEN_SPIEL_BUILD_WITH_LIBTORCH_DOWNLOAD_URL="${OPEN_SPIEL_BUILD_WITH_LIBTORCH_DOWNLOAD_URL:-"https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-1.12.1%2Bcpu.zip"}"
 
 # TensorflowCC is a CMake interface to the Tensorflow C++ API. It is used in
 # C++ AlphaZero. See: https://github.com/deepmind/open_spiel/blob/master/docs/alpha_zero.md
@@ -106,7 +106,7 @@ export OPEN_SPIEL_BUILD_WITH_ORTOOLS_DOWNLOAD_URL="${OPEN_SPIEL_BUILD_WITH_ORTOO
 # Used to determine whether to include the Python ML frameworks in the tests.
 # A value of AUTO runs the appropriate find_X script in open_spiel/scripts to check what is installed.
 # To override automatic detection, set to either ON or OFF.
-export OPEN_SPIEL_ENABLE_JAX=${OPEN_SPIEL_ENABLE_JAX:-"AUTO"}
-export OPEN_SPIEL_ENABLE_PYTORCH=${OPEN_SPIEL_ENABLE_PYTORCH:-"AUTO"}
+export OPEN_SPIEL_ENABLE_JAX=${OPEN_SPIEL_ENABLE_JAX:-"ON"}
+export OPEN_SPIEL_ENABLE_PYTORCH=${OPEN_SPIEL_ENABLE_PYTORCH:-"ON"}
 export OPEN_SPIEL_ENABLE_TENSORFLOW=${OPEN_SPIEL_ENABLE_TENSORFLOW:-"AUTO"}
 export OPEN_SPIEL_ENABLE_PYTHON_MISC=${OPEN_SPIEL_ENABLE_PYTHON_MISC:-"OFF"}

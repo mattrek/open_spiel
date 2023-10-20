@@ -106,7 +106,8 @@ double SearchNode::PUCTValue(int parent_explore_count, double uct_c) const {
     return outcome[player];
   }
 
-  return ((explore_count != 0 ? total_reward / explore_count : 0) +
+  // mattrek: Use 10.0 as default to ensure each node gets an eval, ordered by prior
+  return ((explore_count != 0 ? total_reward / explore_count : 10.0) +
           uct_c * prior * std::sqrt(parent_explore_count) /
               (explore_count + 1));
 }
@@ -117,10 +118,13 @@ bool SearchNode::CompareFinal(const SearchNode& b) const {
   if (out != out_b) {
     return out < out_b;
   }
+  // mattrek: be greedy
+  /*
   if (explore_count != b.explore_count) {
     return explore_count < b.explore_count;
   }
-  return total_reward < b.total_reward;
+  */
+  return (total_reward / explore_count) < (b.total_reward / b.explore_count);
 }
 
 const SearchNode& SearchNode::BestChild() const {
@@ -162,17 +166,17 @@ std::string SearchNode::ChildrenStr(const State& state) const {
 
 std::string SearchNode::ToString(const State& state) const {
   return absl::StrFormat(
-      "%6s: player: %d, prior: %5.3f, value: %6.3f, sims: %5d, outcome: %s, "
-      "%3d children",
+      "%6s: player: %d, prior: %5.3f, eval: %5.3f, value: %5.3f, sims: %4d, outcome: %s, ",
+      //"%3d children",
       (action != kInvalidAction ? state.ActionToString(player, action)
                                 : "none"),
-      player, prior, (explore_count ? total_reward / explore_count : 0.),
+      player, prior, eval, (explore_count ? total_reward / explore_count : 0.),
       explore_count,
       (outcome.empty()
            ? "none"
            : absl::StrFormat("%4.1f",
-                             outcome[player == kChancePlayerId ? 0 : player])),
-      children.size());
+                             outcome[player == kChancePlayerId ? 0 : player])));
+      //children.size());
 }
 
 Action SearchNode::SampleFromPrior(const State& state,
@@ -202,12 +206,13 @@ std::vector<double> dirichlet_noise(int count, double alpha,
 }
 
 MCTSBot::MCTSBot(const Game& game, std::shared_ptr<Evaluator> evaluator,
-                 double uct_c, int max_simulations, int64_t max_memory_mb,
-                 bool solve, int seed, bool verbose,
+                 double uct_c, int min_simulations, int max_simulations,
+                 int64_t max_memory_mb, bool solve, int seed, bool verbose,
                  ChildSelectionPolicy child_selection_policy,
                  double dirichlet_alpha, double dirichlet_epsilon,
                  bool dont_return_chance_node)
     : uct_c_{uct_c},
+      min_simulations_{min_simulations},
       max_simulations_{max_simulations},
       max_nodes_((max_memory_mb << 20) / sizeof(SearchNode) + 1),
       nodes_(0),
@@ -252,12 +257,20 @@ Action MCTSBot::Step(const State& state) {
       std::cerr << root->ToString(state) << std::endl;
       std::cerr << "Children:" << std::endl;
       std::cerr << root->ChildrenStr(state) << std::endl;
+
+      double action_value =
+          best.outcome.empty()
+              ? best.eval
+              : best.outcome[best.player];
+      std::cerr << absl::StrFormat(
+          "Trajectory value of chosen: %.3f", action_value) << std::endl;
       if (!best.children.empty()) {
         std::unique_ptr<State> chosen_state = state.Clone();
         chosen_state->ApplyAction(best.action);
         std::cerr << "Children of chosen:" << std::endl;
         std::cerr << best.ChildrenStr(*chosen_state) << std::endl;
       }
+
     }
     return best.action;
   }
@@ -288,8 +301,12 @@ std::unique_ptr<State> MCTSBot::ApplyTreePolicy(
               dirichlet_epsilon_ * noise[i];
         }
       }
-      // Reduce bias from move generation order.
-      std::shuffle(legal_actions.begin(), legal_actions.end(), rng_);
+      if (child_selection_policy_ == ChildSelectionPolicy::UCT
+          || working_state->IsChanceNode()) {
+        // Reduce bias from move generation order.
+        // mattrek: No need to shuffle for PUCT; selection orders by prior.
+        std::shuffle(legal_actions.begin(), legal_actions.end(), rng_);
+      }
       Player player = working_state->CurrentPlayer();
       current_node->children.reserve(legal_actions.size());
       for (auto [action, prior] : legal_actions) {
@@ -300,6 +317,9 @@ std::unique_ptr<State> MCTSBot::ApplyTreePolicy(
 
     Action selected_action;
     if (current_node->children.empty()) {
+      // mattrek: this code can't be reached because curent_node's children are
+      // always expanded above
+      SpielFatalError("Could not expand children.");
       // no children, sample from prior
       selected_action = current_node->SampleFromPrior(state, evaluator_.get(),
                                                       &rng_);
@@ -307,15 +327,31 @@ std::unique_ptr<State> MCTSBot::ApplyTreePolicy(
       // look at children
       SearchNode* chosen_child = nullptr;
       if (working_state->IsChanceNode()) {
-        // For chance nodes, rollout according to chance node's probability
-        // distribution
-        Action chosen_action =
-            SampleAction(working_state->ChanceOutcomes(), rng_).first;
-
-        for (SearchNode& child : current_node->children) {
-          if (child.action == chosen_action) {
-            chosen_child = &child;
-            break;
+        if (current_node->explore_count <= 0) {
+          // For the first visit to a chance node, choose according to the
+          // probability distribution
+          Action chosen_action =
+              SampleAction(working_state->ChanceOutcomes(), rng_).first;
+          for (SearchNode& child : current_node->children) {
+            if (child.action == chosen_action) {
+              chosen_child = &child;
+              break;
+            }
+          }
+        } else {
+          // mattrek: reduce luck induced variance by visiting chance outcomes
+          //  as proportionally expected, noting children will have already been
+          //  shuffled above
+          double max_value = -std::numeric_limits<double>::infinity();
+          for (SearchNode& child : current_node->children) {
+            // choose the child whose visit proportion is farthest from expected
+            double val =  child.prior
+                - static_cast<double>(child.explore_count)
+                  / current_node->explore_count;
+            if (val > max_value) {
+              max_value = val;
+              chosen_child = &child;
+            }
           }
         }
       } else {
@@ -357,6 +393,9 @@ std::unique_ptr<SearchNode> MCTSBot::MCTSearch(const State& state) {
   std::vector<double> returns;
   visit_path.reserve(64);
   for (int i = 0; i < max_simulations_; ++i) {
+    //mattrek: just look at each move once (i.e. 0-ply)
+    if (root->children.size() > 1 && i > root->children.size()) break;
+
     visit_path.clear();
     returns.clear();
 
@@ -368,6 +407,9 @@ std::unique_ptr<SearchNode> MCTSBot::MCTSearch(const State& state) {
       returns = working_state->Returns();
       visit_path[visit_path.size() - 1]->outcome = returns;
       solved = solve_;
+    } else if (!dont_return_chance_node_ && working_state->IsChanceNode()) {
+      // TODO: Return a weighted average of the (tree of?) chance outcomes
+      SpielFatalError("Can't evaluate a chance node.");
     } else {
       returns = evaluator_->Evaluate(*working_state);
       solved = false;
@@ -383,7 +425,11 @@ std::unique_ptr<SearchNode> MCTSBot::MCTSearch(const State& state) {
         decision_node_idx--;
       }
 
-      node->total_reward += returns[visit_path[decision_node_idx]->player];
+      double node_returns = returns[visit_path[decision_node_idx]->player];
+      node->total_reward += node_returns;
+      if (node->explore_count == 0) {
+        node->eval = node_returns;
+      }
       node->explore_count += 1;
       visit_path.pop_back();
 
@@ -391,18 +437,41 @@ std::unique_ptr<SearchNode> MCTSBot::MCTSearch(const State& state) {
       if (solved && !node->children.empty()) {
         Player player = node->children[0].player;
         if (player == kChancePlayerId) {
-          // Only back up chance nodes if all have the same outcome.
-          // An alternative would be to back up the weighted average of
-          // outcomes if all children are solved, but that is less clear.
-          const std::vector<double>& outcome = node->children[0].outcome;
-          if (!outcome.empty() &&
-              std::all_of(node->children.begin() + 1, node->children.end(),
-                          [&outcome](const SearchNode& c) {
-                            return c.outcome == outcome;
-                          })) {
-            node->outcome = outcome;
+          if (true) {
+            // Back up the weighted average of outcomes if all children are solved.
+            bool all_solved = true;
+            std::vector<double> weighted_outcome;
+            for (const SearchNode& child : node->children) {
+              if (child.outcome.empty()) {
+                all_solved = false;
+                break;
+              }
+              if (weighted_outcome.empty()) {
+                weighted_outcome.assign(child.outcome.size(), 0);
+              }
+              for (int j = 0; j < weighted_outcome.size(); ++j) {
+                  weighted_outcome[j] += child.outcome[j] * child.prior;
+              }
+            }
+            if (all_solved) {
+              node->outcome = weighted_outcome;
+            } else {
+              solved = false;
+            }
           } else {
-            solved = false;
+            // Only back up chance nodes if all have the same outcome.
+            // An alternative would be to back up the weighted average of
+            // outcomes if all children are solved, but that is less clear.
+            const std::vector<double>& outcome = node->children[0].outcome;
+            if (!outcome.empty() &&
+                std::all_of(node->children.begin() + 1, node->children.end(),
+                            [&outcome](const SearchNode& c) {
+                              return c.outcome == outcome;
+                            })) {
+              node->outcome = outcome;
+            } else {
+              solved = false;
+            }
           }
         } else {
           // If any have max utility (won?), or all children are solved,
@@ -428,7 +497,7 @@ std::unique_ptr<SearchNode> MCTSBot::MCTSearch(const State& state) {
     }
 
     if (!root->outcome.empty() ||  // Full game tree is solved.
-        root->children.size() == 1) {
+        (root->children.size() == 1 && i >= min_simulations_)) {
       break;
     }
     if (max_nodes_ > 1 && nodes_ >= max_nodes_) {

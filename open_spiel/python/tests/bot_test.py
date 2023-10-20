@@ -55,7 +55,7 @@ class BotTest(absltest.TestCase):
     game = pyspiel.load_game("tic_tac_toe")
     bots = [
         pyspiel.MCTSBot(game, pyspiel.RandomRolloutEvaluator(1, 0), 2.0,
-                        100, 100, False, 42, False)
+                        0, 100, 100, False, 42, False)
     ] * 2
     _ = np.array([
         pyspiel.evaluate_bots(game.new_initial_state(), bots, iteration)
@@ -99,9 +99,8 @@ class BotTest(absltest.TestCase):
                                f"{pyspiel.ROSHAMBO_NUM_THROWS})")
       num_players = 2
       bots = [
-          pyspiel.make_roshambo_bot(0, "rotatebot",
-                                    pyspiel.ROSHAMBO_NUM_THROWS),
-          pyspiel.make_roshambo_bot(1, "copybot", pyspiel.ROSHAMBO_NUM_THROWS)
+          pyspiel.make_roshambo_bot(0, "rotatebot"),
+          pyspiel.make_roshambo_bot(1, "copybot")
       ]
       state = game.new_initial_state()
       for i in range(pyspiel.ROSHAMBO_NUM_THROWS):

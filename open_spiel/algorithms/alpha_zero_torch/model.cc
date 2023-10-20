@@ -58,6 +58,7 @@ ResInputBlockImpl::ResInputBlockImpl(const ResInputBlockConfig& config)
                 .dilation(1)
                 .groups(1)
                 .bias(true)
+                //.bias(false)  // bias unnec when followed by batchnorm
                 .padding_mode(torch::kZeros)),
       batch_norm_(torch::nn::BatchNorm2dOptions(
                       /*num_features=*/config.filters)
@@ -91,6 +92,7 @@ ResTorsoBlockImpl::ResTorsoBlockImpl(const ResTorsoBlockConfig& config,
                  .dilation(1)
                  .groups(1)
                  .bias(true)
+                 //.bias(false)  // bias unnec when followed by batchnorm
                  .padding_mode(torch::kZeros)),
       conv2_(torch::nn::Conv2dOptions(
                  /*input_channels=*/config.filters,
@@ -101,6 +103,7 @@ ResTorsoBlockImpl::ResTorsoBlockImpl(const ResTorsoBlockConfig& config,
                  .dilation(1)
                  .groups(1)
                  .bias(true)
+                 //.bias(false)  // bias unnec when followed by batchnorm
                  .padding_mode(torch::kZeros)),
       batch_norm1_(torch::nn::BatchNorm2dOptions(
                        /*num_features=*/config.filters)
@@ -143,6 +146,7 @@ ResOutputBlockImpl::ResOutputBlockImpl(const ResOutputBlockConfig& config)
                       .dilation(1)
                       .groups(1)
                       .bias(true)
+                      //.bias(false)  // bias unnec when followed by batchnorm
                       .padding_mode(torch::kZeros)),
       value_batch_norm_(
           torch::nn::BatchNorm2dOptions(
@@ -169,6 +173,7 @@ ResOutputBlockImpl::ResOutputBlockImpl(const ResOutputBlockConfig& config)
                        .dilation(1)
                        .groups(1)
                        .bias(true)
+                       //.bias(false)  // bias unnec when followed by batchnorm
                        .padding_mode(torch::kZeros)),
       policy_batch_norm_(
           torch::nn::BatchNorm2dOptions(
@@ -204,11 +209,16 @@ std::vector<torch::Tensor> ResOutputBlockImpl::forward(torch::Tensor x,
   policy_logits = policy_linear_(policy_logits);
   policy_logits = torch::where(mask, policy_logits,
                                -(1 << 16) * torch::ones_like(policy_logits));
+  /* mattrek: hack: policy-less network for bg
+  torch::Tensor policy_logits = torch::where(mask, torch::ones_like(mask, torch::kFloat),
+                               -(1 << 16) * torch::ones_like(mask, torch::kFloat));
+  */
 
   return {value_output, policy_logits};
 }
 
-MLPBlockImpl::MLPBlockImpl(const int in_features, const int out_features)
+MLPTorsoBlockImpl::MLPTorsoBlockImpl(const int in_features,
+                                     const int out_features)
     : linear_(torch::nn::LinearOptions(
                          /*in_features=*/in_features,
                          /*out_features=*/out_features)
@@ -216,8 +226,8 @@ MLPBlockImpl::MLPBlockImpl(const int in_features, const int out_features)
   register_module("linear", linear_);
 }
 
-torch::Tensor MLPBlockImpl::forward(torch::Tensor x) {
-  return torch::relu(linear_(x));
+torch::Tensor MLPTorsoBlockImpl::forward(torch::Tensor x) {
+  return torch::leaky_relu(linear_(x));
 }
 
 MLPOutputBlockImpl::MLPOutputBlockImpl(const int nn_width,
@@ -246,13 +256,17 @@ MLPOutputBlockImpl::MLPOutputBlockImpl(const int nn_width,
 
 std::vector<torch::Tensor> MLPOutputBlockImpl::forward(torch::Tensor x,
                                                        torch::Tensor mask) {
-  torch::Tensor value_output = torch::relu(value_linear1_(x));
+  torch::Tensor value_output = torch::leaky_relu(value_linear1_(x));
   value_output = torch::tanh(value_linear2_(value_output));
 
-  torch::Tensor policy_logits = torch::relu(policy_linear1_(x));
+  torch::Tensor policy_logits = torch::leaky_relu(policy_linear1_(x));
   policy_logits = policy_linear2_(policy_logits);
   policy_logits = torch::where(mask, policy_logits,
                                -(1 << 16) * torch::ones_like(policy_logits));
+  /* mattrek: hack: policy-less network for bg
+  torch::Tensor policy_logits = torch::where(mask, torch::ones_like(mask, torch::kFloat),
+                               -(1 << 16) * torch::ones_like(mask, torch::kFloat));
+  */
 
   return {value_output, policy_logits};
 }
@@ -261,6 +275,19 @@ ModelImpl::ModelImpl(const ModelConfig& config, const std::string& device)
     : device_(device),
       num_torso_blocks_(config.nn_depth),
       weight_decay_(config.weight_decay) {
+
+  // It may be this improves performance on other devices too, but it has
+  // only been tested w cpu.
+  if (device.find("cpu") != std::string::npos) {
+    // libtorch-1.12 threading causes too much overhead on cpu,
+    // Setting threads=1 speeds up performance significantly.
+    // See also: https://pytorch.org/docs/stable/notes/cpu_threading_torchscript_inference.html
+    torch::set_num_threads(1);
+  }
+  std::cerr << "Torch numthreads=" << torch::get_num_threads() << std::endl;
+  std::cerr << "Model learning rate=" << config.learning_rate << std::endl;
+  std::cerr << "Model weight decay=" << config.weight_decay << std::endl;
+
   // Save config.nn_model to class
   nn_model_ = config.nn_model;
 
@@ -310,9 +337,9 @@ ModelImpl::ModelImpl(const ModelConfig& config, const std::string& device)
     register_module("layers", layers_);
 
   } else if (config.nn_model == "mlp") {
-    layers_->push_back(MLPBlock(input_size, config.nn_width));
     for (int i = 0; i < num_torso_blocks_; i++) {
-      layers_->push_back(MLPBlock(config.nn_width, config.nn_width));
+      layers_->push_back(
+          MLPTorsoBlock((i == 0 ? input_size : config.nn_width), config.nn_width));
     }
     layers_->push_back(
         MLPOutputBlock(config.nn_width, config.number_of_actions));
@@ -383,15 +410,21 @@ std::vector<torch::Tensor> ModelImpl::forward_(torch::Tensor x,
       }
     }
   } else if (this->nn_model_ == "mlp") {
-    for (int i = 0; i < num_torso_blocks_ + 1; i++) {
-        x = layers_[i]->as<MLPBlock>()->forward(x);
+    for (int i = 0; i < num_torso_blocks_; i++) {
+        x = layers_[i]->as<MLPTorsoBlock>()->forward(x);
     }
-    output = layers_[num_torso_blocks_ + 1]->as<MLPOutputBlockImpl>()
-        ->forward(x, mask);
+    output = layers_[num_torso_blocks_]->as<MLPOutputBlockImpl>()->forward(x, mask);
   } else {
     throw std::runtime_error("Unknown nn_model: " + this->nn_model_);
   }
   return output;
+}
+
+void ModelImpl::print() const {
+  std::cerr << "Model parameters: " << std::endl;
+  for (auto& named_parameter : this->named_parameters()) {
+    std::cerr << named_parameter.key() << ": " << named_parameter.value() << std::endl;
+  }
 }
 
 }  // namespace torch_az

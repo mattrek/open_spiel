@@ -156,15 +156,15 @@ class ResOutputBlockImpl : public torch::nn::Module {
 TORCH_MODULE(ResOutputBlock);
 
 // A dense block with ReLU activation.
-class MLPBlockImpl : public torch::nn::Module {
+class MLPTorsoBlockImpl : public torch::nn::Module {
  public:
-  MLPBlockImpl(const int in_features, const int out_features);
+  MLPTorsoBlockImpl(const int in_features, const int out_features);
   torch::Tensor forward(torch::Tensor x);
 
  private:
   torch::nn::Linear linear_;
 };
-TORCH_MODULE(MLPBlock);
+TORCH_MODULE(MLPTorsoBlock);
 
 class MLPOutputBlockImpl : public torch::nn::Module {
  public:
@@ -188,6 +188,7 @@ class ModelImpl : public torch::nn::Module {
   std::vector<torch::Tensor> losses(torch::Tensor inputs, torch::Tensor masks,
                                     torch::Tensor policy_targets,
                                     torch::Tensor value_targets);
+  void print() const;
 
  private:
   std::vector<torch::Tensor> forward_(torch::Tensor x, torch::Tensor mask);

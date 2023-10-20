@@ -115,10 +115,8 @@ class BargainingState : public State {
       int player_id, std::function<double()> rng) const override;
 
   // Extra methods not part of the general API.
-  Instance GetInstance() const { return instance_; }
+  Instance instance() const { return instance_; }
   void SetInstance(Instance instance);
-
-  std::vector<Offer> Offers() const { return offers_; }
 
   Action AgreeAction() const;
 
@@ -159,8 +157,6 @@ class BargainingGame : public Game {
   const std::vector<Offer>& AllOffers() const { return all_offers_; }
   const Instance& GetInstance(int num) const { return all_instances_[num]; }
   const Offer& GetOffer(int num) const { return all_offers_[num]; }
-  std::pair<Offer, Action> GetOfferByQuantities(
-      const std::vector<int>& quantities) const;
 
  private:
   void ParseInstancesFile(const std::string& filename);

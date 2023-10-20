@@ -124,6 +124,7 @@ class VPNetModel {
   void LoadCheckpoint(int step);
   void LoadCheckpoint(const std::string& path);
 
+  void Print() const { model_->print(); }
   const std::string Device() const { return device_; }
 
  private:

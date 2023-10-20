@@ -43,9 +43,12 @@
 namespace open_spiel {
 namespace backgammon {
 
+constexpr bool kUseResnet = false;
+
 inline constexpr const int kNumPlayers = 2;
 inline constexpr const int kNumChanceOutcomes = 21;
 inline constexpr const int kNumPoints = 24;
+inline constexpr const int kNumDice = 2;
 inline constexpr const int kNumDiceOutcomes = 6;
 inline constexpr const int kXPlayerId = 0;
 inline constexpr const int kOPlayerId = 1;
@@ -61,17 +64,33 @@ inline constexpr const int kNumCheckersPerPlayer = 15;
 inline constexpr const int kBarPos = 100;
 inline constexpr const int kScorePos = 101;
 
-// The action encoding stores a number in { 0, 1, ..., 1351 }. If the high
-// roll is to move first, then the number is encoded as a 2-digit number in
-// base 26 ({0, 1, .., 23, kBarPos, Pass}) (=> first 676 numbers). Otherwise,
-// the low die is to move first and, 676 is subtracted and then again the
-// number is encoded as a 2-digit number in base 26.
-inline constexpr const int kNumDistinctActions = 1352;
+// An n-length checker sequence is encoded into an Action as an n-digit number
+// in base kNumSingleCheckerActions+1.
+inline constexpr const int kNumMovesPerCheckerSequence = 4;
+
+// The set of actions consists of both checker moves and some other actions.
+// For checker moves, each checker on a point or the bar can be moved according
+// to a single die, yielding (kNumPoints + 1) * kNumDiceOutcomes unique actions.
+inline constexpr const int kNumSingleCheckerActions =
+    (kNumPoints + 1) * kNumDiceOutcomes;
+constexpr const int ipow(int a, int b) { return b == 0 ? 1 : a * ipow(a, b-1); }
+inline constexpr const int kNumCheckerActions =
+    ipow(kNumSingleCheckerActions+1, kNumMovesPerCheckerSequence);
+
+// The action encoding stores a number in { 1, ..., kNumDistinctActions }.
+// The first kNumCheckerActions of these encode checker moves, and the
+// remaining encode each of the other actions as enumerated below.
+inline constexpr const Action kEndTurnAction = kNumCheckerActions + 1;
+inline constexpr const Action kRollAction = kNumCheckerActions + 2;
+inline constexpr const Action kDoubleAction = kNumCheckerActions + 3;
+inline constexpr const Action kTakeAction = kNumCheckerActions + 4;
+inline constexpr const Action kDropAction = kNumCheckerActions + 5;
+inline constexpr const int kNumDistinctActions = kNumCheckerActions + 5;
 
 // See ObservationTensorShape for details.
-inline constexpr const int kBoardEncodingSize = 4 * kNumPoints * kNumPlayers;
-inline constexpr const int kStateEncodingSize =
-    3 * kNumPlayers + kBoardEncodingSize;
+inline constexpr const int kBoardEncodingSize = kNumPoints * kNumPlayers;
+// TODO: cleanup state encoding size for resent, value below is for mlp
+inline constexpr const int kStateEncodingSize = 420;
 inline constexpr const char* kDefaultScoringType = "winloss_scoring";
 inline constexpr bool kDefaultHyperBackgammon = false;
 
@@ -81,6 +100,24 @@ enum class ScoringType {
   kEnableGammons,   // "enable_gammons": Score 2 points for a "gammon".
   kFullScoring,     // "full_scoring": Score gammons as well as 3 points for a
                     // "backgammon".
+};
+
+// The number of dice (i.e. up to 4 for doublets) that must be legally played
+// in a state.
+// Rule 2 in Movement of Checkers:
+// A player must use both numbers of a roll if this is legally possible (or
+// all four numbers of a double). When only one number can be played, the
+// player must play that number. Or if either number can be played but not
+// both, the player must play the larger one. When neither number can be used,
+// the player loses his turn. In the case of doubles, when all four numbers
+// cannot be played, the player must play as many numbers as he can.
+enum class LegalLevel {
+  kNoDice,
+  kLowDie,
+  kHighDie,
+  kTwoDice,
+  kThreeDice,
+  kFourDice,
 };
 
 struct CheckerMove {
@@ -101,15 +138,18 @@ struct TurnHistoryInfo {
   int player;
   int prev_player;
   std::vector<int> dice;
+  std::vector<int> remaining_dice;
   Action action;
   bool double_turn;
   bool first_move_hit;
   bool second_move_hit;
   TurnHistoryInfo(int _player, int _prev_player, std::vector<int> _dice,
+                  std::vector<int> _remaining_dice,
                   int _action, bool _double_turn, bool fmh, bool smh)
       : player(_player),
         prev_player(_prev_player),
         dice(_dice),
+        remaining_dice(_remaining_dice),
         action(_action),
         double_turn(_double_turn),
         first_move_hit(fmh),
@@ -117,6 +157,7 @@ struct TurnHistoryInfo {
 };
 
 class BackgammonGame;
+class CheckerMoveSequence;
 
 class BackgammonState : public State {
  public:
@@ -127,11 +168,14 @@ class BackgammonState : public State {
   Player CurrentPlayer() const override;
   void UndoAction(Player player, Action action) override;
   std::vector<Action> LegalActions() const override;
-  std::string ActionToString(Player player, Action move_id) const override;
+  std::string ActionToString(Player player, Action action) const override;
+  std::string ActionToMatString(Action action) const;
   std::vector<std::pair<Action, double>> ChanceOutcomes() const override;
   std::string ToString() const override;
+  std::string PositionId() const;
   bool IsTerminal() const override;
   std::vector<double> Returns() const override;
+  std::string InformationStateString(Player player) const override;
   std::string ObservationString(Player player) const override;
   void ObservationTensor(Player player,
                          absl::Span<float> values) const override;
@@ -149,26 +193,33 @@ class BackgammonState : public State {
 
   // Compute a distance between 'from' and 'to'. The from can be kBarPos. The
   // to can be a number below 0 or above 23, but do not use kScorePos directly.
+  /* mattrek: unused code
   int GetDistance(int player, int from, int to) const;
+  */
 
   // Is this position off the board, i.e. >23 or <0?
   bool IsOff(int player, int pos) const;
 
   // Returns whether pos2 is further (closer to scoring) than pos1 for the
   // specifed player.
+  /* mattrek: unused code
   bool IsFurther(int player, int pos1, int pos2) const;
+  */
 
   // Is this a legal from -> to checker move? Here, the to_pos can be a number
   // that is outside {0, ..., 23}; if so, it is counted as "off the board" for
   // the corresponding player (i.e. >23 is a bear-off move for XPlayerId, and
   // <0 is a bear-off move for OPlayerId).
+  /* mattrek: unused code
   bool IsLegalFromTo(int player, int from_pos, int to_pos, int my_checkers_from,
                      int opp_checkers_to) const;
+  */
 
   // Get the To position for this play given the from position and number of
   // pips on the die. This function simply adds the values: the return value
   // will be a position that might be off the the board (<0 or >23).
   int GetToPos(int player, int from_pos, int pips) const;
+
 
   // Count the total number of checkers for this player (on the board, in the
   // bar, and have borne off). Should be 15 for the standard game.
@@ -178,13 +229,16 @@ class BackgammonState : public State {
   bool IsHit(Player player, int from_pos, int num) const;
 
   // Accessor functions for some of the specific data.
+  /* mattrek: unused code
   int player_turns() const { return turns_; }
   int player_turns(int player) const {
     return (player == kXPlayerId ? x_turns_ : o_turns_);
   }
+  */
   int bar(int player) const { return bar_[player]; }
   int score(int player) const { return scores_[player]; }
   int dice(int i) const { return dice_[i]; }
+  int remaining_dice(int i) const { return remaining_dice_[i]; }
   bool double_turn() const { return double_turn_; }
 
   // Get the number of checkers on the board in the specified position belonging
@@ -196,25 +250,35 @@ class BackgammonState : public State {
   // Action encoding / decoding functions. Note, the converted checker moves
   // do not contain the hit information; use the AddHitInfo function to get the
   // hit information.
+  Action SingleCheckerMoveToSpielMove(const CheckerMove& move) const;
   Action CheckerMovesToSpielMove(const std::vector<CheckerMove>& moves) const;
-  std::vector<CheckerMove> SpielMoveToCheckerMoves(int player,
-                                                   Action spiel_move) const;
-  Action TranslateAction(int from1, int from2, bool use_high_die_first) const;
+  CheckerMove SpielMoveToSingleCheckerMove(Action action) const;
+  std::vector<CheckerMove> SpielMoveToCheckerMoves(Action action) const;
+  bool ApplyCheckerMove(const CheckerMove& move);
+  void UndoCheckerMove(const CheckerMove& move);
 
   // Return checker moves with extra hit information.
   std::vector<CheckerMove>
   AugmentWithHitInfo(Player player,
                      const std::vector<CheckerMove> &cmoves) const;
+  // Declared public for testing purposes.
+  LegalLevel DetermineLegalLevel() const;
 
  protected:
-  void DoApplyAction(Action move_id) override;
+  void DoApplyAction(Action action) override;
 
  private:
   void SetupInitialBoard();
   void RollDice(int outcome);
+  void InitRemainingDice();
+
+  /* mattrek: unused code
   bool IsPosInHome(int player, int pos) const;
+  */
   bool AllInHome(int player) const;
+  /* mattrek: unused code
   int CheckersInHome(int player) const;
+  */
   bool UsableDiceOutcome(int outcome) const;
   int PositionFromBar(int player, int spaces) const;
   int PositionFrom(int player, int pos, int spaces) const;
@@ -223,8 +287,7 @@ class BackgammonState : public State {
   int IsGammoned(int player) const;
   int IsBackgammoned(int player) const;
   int DiceValue(int i) const;
-  int HighestUsableDiceOutcome() const;
-  Action EncodedPassMove() const;
+
   Action EncodedBarMove() const;
 
   // A helper function used by ActionToString to add necessary hit information
@@ -235,13 +298,13 @@ class BackgammonState : public State {
   // Returns -1 if none found.
   int FurthestCheckerInHome(int player) const;
 
-  bool ApplyCheckerMove(int player, const CheckerMove& move);
-  void UndoCheckerMove(int player, const CheckerMove& move);
-  std::set<CheckerMove> LegalCheckerMoves(int player) const;
-  int RecLegalMoves(std::vector<CheckerMove> moveseq,
-                    std::set<std::vector<CheckerMove>>* movelist);
-  std::vector<Action> ProcessLegalMoves(
-      int max_moves, const std::set<std::vector<CheckerMove>>& movelist) const;
+  std::set<CheckerMoveSequence> LegalCheckerMoveSequences() const;
+  std::set<CheckerMove> LegalSingleCheckerMoves() const;
+  std::set<CheckerMove> SingleCheckerMoves(
+      int die, bool bFirstOnly = false) const;
+  // Helper function for DetermineLegalLevel(), returns the max number of dice that
+  // can be played from 'state' given 'dice_to_play'.
+  int NumMaxPlayableDies(BackgammonState* state, std::vector<int> dice_to_play) const;
 
   ScoringType scoring_type_;  // Which rules apply when scoring the game.
   bool hyper_backgammon_;     // Is the Hyper-backgammon variant enabled?
@@ -252,7 +315,8 @@ class BackgammonState : public State {
   int x_turns_;
   int o_turns_;
   bool double_turn_;
-  std::vector<int> dice_;    // Current dice.
+  std::vector<int> dice_;    // The 2 rolled dice.
+  std::vector<int> remaining_dice_;    // Dice (up to 4) remaining to play, adjusted for LegalLevel..
   std::vector<int> bar_;     // Checkers of each player in the bar.
   std::vector<int> scores_;  // Checkers returned home by each player.
   std::vector<std::vector<int>> board_;  // Checkers for each player on points.
@@ -287,23 +351,39 @@ class BackgammonGame : public Game {
   double MaxUtility() const override;
 
   std::vector<int> ObservationTensorShape() const override {
-    // Encode each point on the board as four doubles:
-    // - One double for whether there is one checker or not (1 or 0).
-    // - One double for whether there are two checkers or not (1 or 0).
-    // - One double for whether there are three checkers or not (1 or 0).
-    // - One double if there are more than 3 checkers, the number of checkers.
-    //   more than three that are on that point.
-    //
-    // Return a vector encoding:
-    // Every point listed for the current player.
-    // Every point listed for the opponent.
-    // One double for the number of checkers on the bar for the current player.
-    // One double for the number of checkers scored for the current player.
-    // One double for whether it's the current player's turn (1 or 0).
-    // One double for the number of checkers on the bar for the opponent.
-    // One double for the number of checkers scored for the opponent.
-    // One double for whether it's the opponent's turn (1 or 0).
+    if (kUseResnet) {
+      // plane 1 for X checkers (25->0, i.e.: bar + board + off)
+      // plane 2 for O checkers (0->25, i.e.: off + board + bar)
+      // plane 3 for X to act
+      // plane 4 for O to act
+      // plane 5 for num remaining 1s to play
+      // plane 6 for num remaining 2s to play
+      // plane 7 for num remaining 3s to play
+      // plane 8 for num remaining 4s to play
+      // plane 9 for num remaining 5s to play
+      // plane 10 for num remaining 6s to play
+      // plane 11 for X away score
+      // plane 12 for O away score
+      // plane 13 for crawford score
+      // plane 14 for cube level
+      // plane 15 for dice have rolled
+      // plane 16 for cube was turned
+      return {16, 1, kNumPoints + 2};
+    }
 
+    // 2x191 for 2 players:
+    // - 1x7 one-hot w overage for num checkers on bar
+    // - 24x7 one-hot w overage for num checkers on a point
+    // - 1x16 one-hot for checkers off
+    // X turn (0 or 1).
+    // O turn (0 or 1).
+    // 6x5 for num remaining of each die (1s thru 6s) as a one-hot
+    // X away score == 1
+    // O away score == 1
+    // crawford score == 0
+    // cube level == 1
+    // dice have rolled (0 or 1)
+    // cube was turned == 0
     return {kStateEncodingSize};
   }
 
@@ -312,6 +392,23 @@ class BackgammonGame : public Game {
  private:
   ScoringType scoring_type_;  // Which rules apply when scoring the game.
   bool hyper_backgammon_;     // Is hyper-backgammon variant enabled?
+};
+
+class CheckerMoveSequence {
+public:
+  CheckerMoveSequence(const BackgammonState& state);
+  BackgammonState GetState() const { return state_; }
+  std::vector<CheckerMove> GetMoves() const { return moves_; }
+  std::string GetId() const { return id_; };
+  void AddMove(const CheckerMove& move);
+  bool operator<(const CheckerMoveSequence& rhs) const {
+    return GetId() < rhs.GetId();
+  }
+
+private:
+  std::vector<CheckerMove> moves_; // sequence of moves
+  BackgammonState state_; // resulting state after applying moves
+  std::string id_; // a unique id of the resulting position
 };
 
 }  // namespace backgammon

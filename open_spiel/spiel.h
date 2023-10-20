@@ -546,6 +546,10 @@ class State {
 
   // Returns the view of the game, preferably from `player`'s perspective.
   //
+  // mattrek: Both the MCTS evaluator and the insertions into the replay buffer used by AlphaZero
+  // expect that inference using this observation tensor always returns winning chances for Player1,
+  // not the current player.
+  //
   // Implementations should start with (and it's tested in api_test.py):
   //   SPIEL_CHECK_GE(player, 0);
   //   SPIEL_CHECK_LT(player, num_players_);
